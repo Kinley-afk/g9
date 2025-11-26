@@ -1,300 +1,239 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import seaborn as sns
-import matplotlib.pyplot as plt
-import os
 import joblib
+import os
 from sklearn.model_selection import train_test_split
-from sklearn.linear_model import Ridge
-from sklearn.metrics import mean_squared_error
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
+from sklearn.metrics import accuracy_score
 
-# --- Configuration & File Paths (Use in-memory data when possible for single file) ---
-MODEL_PATH = "trained_model.pkl" # Save model in the same directory for simplicity
-TEMP_DATA_PATH = "temp_data.csv" # Temporary file to pass data between steps
+# --- Configuration ---
+MODEL_PATH = 'models/logistic_regression_model.pkl'
+PREPROCESSOR_PATH = 'models/preprocessor.pkl'
+RAW_DATA_PATH = "road_safety_indicators_btn.csv"
+TARGET_COLUMN = 'Is_Law'
+FEATURE_COLUMNS = ['GHO_DISPLAY', 'DIMENSION_NAME']
 
-st.set_page_config(layout="wide", page_title="Bhutan Healthcare Data Science Workflow")
+# --- Helper Functions (Model Training/Loading) ---
 
-## --- 1. Data Generation (Simulating Data Acquisition) ---
-def create_synthetic_data():
-    """Creates a synthetic dataset to simulate Bhutan health indicators."""
-    st.subheader("1️⃣ Data Generation (Synthetic)")
+def create_and_train_model(df_features, features, target):
+    """Creates, trains, and saves the full ML pipeline."""
+    st.info("Starting model training: Logistic Regression (Target: Is_Law)")
     
-    dzongkhags = ['Thimphu', 'Paro', 'Chukha', 'Samdrup Jongkhar', 'Bumthang']
-    years = np.arange(2018, 2023)
+    # 1. Feature Selection and Split
+    df_model = df_features[features + [target]].copy().dropna(subset=features + [target])
     
-    data = []
-    for year in years:
-        for dzongkhag in dzongkhags:
-            data.append({
-                'Dzongkhag': dzongkhag,
-                'Year': year,
-                # Simulate lower malaria in highly urban Thimphu
-                'Malaria_Cases': np.random.randint(0, 50) if dzongkhag != 'Thimphu' else np.random.randint(0, 5),
-                'TB_Cases': np.random.randint(10, 100),
-                'Hospital_Admissions': np.random.randint(500, 3000),
-                'Vaccination_Rate': np.random.uniform(0.8, 0.99) * 100
-            })
+    if len(df_model) < 5 or df_model[target].nunique() < 2:
+        st.error("Insufficient data for training after cleaning (need at least 2 classes or 5 rows).")
+        return None
+        
+    X = df_model[features]
+    y = df_model[target]
+    
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42, stratify=y)
 
-    df = pd.DataFrame(data)
-    
-    # Introduce missing values for preprocessing test
-    df.loc[df.sample(frac=0.05, random_state=42).index, 'Malaria_Cases'] = np.nan
-    df.loc[df.sample(frac=0.02, random_state=42).index, 'Hospital_Admissions'] = np.nan
-    
-    st.success(f"Generated synthetic data: {df.shape[0]} records, {df['Dzongkhag'].nunique()} Dzongkhags.")
-    return df
-
-## --- 2. Data Preprocessing & Feature Engineering ---
-def preprocess_and_engineer(df_raw: pd.DataFrame):
-    """Performs cleaning, feature engineering, and scaling."""
-    st.subheader("2️⃣ Preprocessing & Feature Engineering")
-    df = df_raw.copy()
-
-    # --- Feature Engineering (Step 5.4) ---
-    st.info("Applying Feature Engineering: Calculating Risk Score and Admission Rate.")
-    df['Disease_Risk_Score'] = df['Malaria_Cases'] * 2 + df['TB_Cases'] * 1.5
-    
-    # Per Capita Proxy (using a synthetic population size for Dzongkhags)
-    dzongkhag_pop = {
-        'Thimphu': 130000, 'Paro': 45000, 'Chukha': 90000, 
-        'Samdrup Jongkhar': 40000, 'Bumthang': 18000
-    }
-    df['Population'] = df['Dzongkhag'].map(dzongkhag_pop)
-    df['Admission_Rate_Per_1000'] = (df['Hospital_Admissions'] / df['Population']) * 1000
-    df_eda = df.drop(columns=['Population']) # Data for EDA (unscaled)
-
-    # --- Preprocessing (Step 5.2) ---
-    numerical_features = ['Malaria_Cases', 'TB_Cases', 'Hospital_Admissions', 'Vaccination_Rate', 
-                          'Disease_Risk_Score', 'Admission_Rate_Per_1000']
-    categorical_features = ['Dzongkhag']
-    
-    # 1. Numerical Pipeline (Imputation and Scaling)
-    numerical_pipeline = Pipeline(steps=[
-        ('imputer', SimpleImputer(strategy='median')),
-        ('scaler', StandardScaler())
-    ])
-
-    # 2. Categorical Pipeline (Encoding)
-    categorical_pipeline = Pipeline(steps=[
-        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
-    ])
-    
+    # 2. Preprocessing Pipeline
     preprocessor = ColumnTransformer(
         transformers=[
-            ('num', numerical_pipeline, numerical_features),
-            ('cat', categorical_pipeline, categorical_features)
+            ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False), features)
         ],
-        remainder='passthrough'
+        remainder='drop'
     )
-    
-    # Save the fitted pipeline/preprocessor for model inference later
-    df_for_fit = df.drop(columns=['Population'])
-    df_for_fit.dropna(subset=['Year'], inplace=True) # Ensure 'Year' is clean for pass-through
 
-    X_processed = preprocessor.fit_transform(df_for_fit)
+    # 3. Model Pipeline
+    model_pipeline = Pipeline(steps=[
+        ('preprocessor', preprocessor),
+        ('classifier', LogisticRegression(random_state=42, solver='liblinear'))
+    ])
     
-    # Get feature names
-    feature_names = numerical_features + list(preprocessor.named_transformers_['cat']['onehot'].get_feature_names_out(categorical_features))
-    
-    # Create the final scaled DataFrame
-    df_final = pd.DataFrame(X_processed, columns=feature_names + ['Year'])
-    df_final['Year'] = df_for_fit['Year'].values
-    
-    st.success(f"Preprocessing complete. Final scaled data shape: {df_final.shape}")
-    
-    # Save the preprocessor object for use in the prediction widget
-    joblib.dump(preprocessor, 'preprocessor.pkl')
-    
-    return df_final, df_eda, preprocessor
+    # 4. Training
+    model_pipeline.fit(X_train, y_train)
 
-## --- 3. Machine Learning Modeling ---
-def train_model(df_final: pd.DataFrame):
-    """Trains a Ridge Regression model to predict Admission Rate."""
-    st.subheader("3️⃣ Machine Learning Modeling")
-    
-    TARGET = 'Admission_Rate_Per_1000'
-    
-    X = df_final.drop(columns=[TARGET, 'Year'])
-    y = df_final[TARGET]
+    # 5. Evaluation
+    y_pred = model_pipeline.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    st.success(f"Model Trained! Test Accuracy: {accuracy:.2f}")
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-    st.info("Training Ridge Regression Model (Predicting Admission Rate)...")
-    model = Ridge(alpha=1.0)
-    model.fit(X_train, y_train)
-
-    # Evaluate Model
-    y_pred = model.predict(X_test)
-    rmse = mean_squared_error(y_test, y_pred, squared=False)
-    
-    st.markdown(f"**Evaluation Metric:** Root Mean Squared Error (RMSE): **{rmse:.4f}**")
-    
-    # Save Model
-    joblib.dump(model, MODEL_PATH)
+    # 6. Save Model and Preprocessor
+    os.makedirs('models', exist_ok=True)
+    joblib.dump(model_pipeline, MODEL_PATH)
+    joblib.dump(model_pipeline.named_steps['preprocessor'], PREPROCESSOR_PATH)
     st.success(f"Model saved to {MODEL_PATH}")
-    return model
-
-## --- 4. Streamlit App/Interactive Visualization ---
-def run_app(df_final, df_eda, model, preprocessor):
-    """Renders the Streamlit dashboard components."""
     
-    st.title("🇧🇹 Bhutan Healthcare Data Science Dashboard")
-    st.markdown("---")
-    
-    # --- Data Prep for EDA ---
-    df_plot = df_eda.copy()
-    latest_year = df_plot['Year'].max()
-    latest_data = df_plot[df_plot['Year'] == latest_year]
+    return model_pipeline
 
-    # --- 4.1 Key Health Indicators Dashboard ---
-    st.header("4️⃣ Key Health Indicators Overview")
+@st.cache_data
+def load_and_clean_data(file_path):
+    """Loads and performs initial cleaning on the WHO road safety data."""
+    try:
+        # Load the CSV, skipping the metadata row (assuming header is row 0, metadata is row 1)
+        df = pd.read_csv(file_path, header=0)
+        df = df.iloc[1:].reset_index(drop=True)
+        
+        # Clean up column names
+        df.columns = df.columns.str.replace(r'[\(\)]', '', regex=True).str.replace(' ', '_')
+        
+        # Fill NaN for categorical columns used as features
+        df['DIMENSION_NAME'].fillna('N/A', inplace=True)
+        
+        return df
+    except Exception as e:
+        st.error(f"Error loading data: {e}. Check if '{file_path}' exists and is correctly formatted.")
+        st.stop()
+        
+# --- Streamlit UI ---
 
-    col1, col2, col3, col4 = st.columns(4)
+st.set_page_config(page_title="Bhutan Healthcare Analytics", layout="wide")
 
-    avg_risk_score = latest_data['Disease_Risk_Score'].mean()
-    total_admissions = latest_data['Hospital_Admissions'].sum()
-    max_vaccine = latest_data['Vaccination_Rate'].max()
-    
-    col1.metric("Latest Year", str(latest_year))
-    col2.metric("Avg. Disease Risk Score", f"{avg_risk_score:.2f}")
-    col3.metric("Total Admissions (Latest)", f"{int(total_admissions):,}")
-    col4.metric("Max. Vaccination Rate", f"{max_vaccine:.1f}%")
+st.title("🇧🇹 Bhutan Road Safety/Public Health Analytics")
+st.write("This application analyzes WHO Road Safety Indicators for Bhutan and predicts the existence of related national laws.")
+st.markdown("---")
 
-    st.markdown("---")
 
-    # --- 4.2 Time Trend & Dzongkhag Comparison (EDA) ---
-    
-    # Trend Chart
-    st.header("5️⃣ Time Trend of Cases")
-    trend_data = df_plot.groupby('Year')[['Malaria_Cases', 'TB_Cases']].sum().reset_index()
+# ----------------------------------------------------
+# SECTION 1: DATA LOADING
+# ----------------------------------------------------
+st.header("1. Load Healthcare Dataset")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    trend_data.set_index('Year')[['Malaria_Cases', 'TB_Cases']].plot(kind='line', ax=ax, marker='o')
-    ax.set_title('Malaria & TB Cases Trend Over Time')
-    ax.set_ylabel('Total Cases')
-    ax.grid(axis='y', linestyle='--')
+# Directly load the uploaded file for a seamless runnable example
+try:
+    df_raw = load_and_clean_data(RAW_DATA_PATH)
+    st.success(f"Dataset '{RAW_DATA_PATH}' loaded successfully.")
+    st.write("Preview of cleaned raw dataset:")
+    st.dataframe(df_raw.head())
+except:
+    st.warning(f"Could not load required file '{RAW_DATA_PATH}'.")
+    st.stop()
+
+# ----------------------------------------------------
+# SECTION 2: BASIC DATA CLEANING (EDIT AS NEEDED)
+# ----------------------------------------------------
+st.header("2. Basic Data Cleaning")
+
+df_clean = df_raw.copy()
+
+# Custom Cleaning Step (based on initial inspection)
+# Create a binary target: Is a law/mandate 'Yes'?
+df_clean[TARGET_COLUMN] = (df_clean['Value'] == 'Yes').astype(int)
+
+st.write("Cleaned dataset (Target `Is_Law` created):")
+st.dataframe(df_clean[[*FEATURE_COLUMNS, TARGET_COLUMN]].head())
+
+# ----------------------------------------------------
+# SECTION 3: EXPLORATORY DATA ANALYSIS (EDIT AS NEEDED)
+# ----------------------------------------------------
+st.header("3. Exploratory Data Analysis (EDA)")
+
+if st.checkbox("Show target variable distribution"):
+    fig, ax = plt.subplots()
+    df_clean[TARGET_COLUMN].value_counts().plot(kind='bar', ax=ax)
+    ax.set_title(f"Distribution of Target: {TARGET_COLUMN} (1=Yes, 0=No/N/A)")
+    ax.set_xlabel("Is_Law")
+    ax.set_ylabel("Count")
     st.pyplot(fig)
-    
-    # Dzongkhag Comparison
-    st.header("6️⃣ District-wise Comparison")
-    
-    indicator_choice = st.selectbox(
-        'Select Indicator for Comparison:',
-        ['Admission_Rate_Per_1000', 'Disease_Risk_Score', 'Vaccination_Rate']
-    )
-    
-    fig_bar, ax_bar = plt.subplots(figsize=(10, 5))
-    sns.barplot(
-        data=latest_data, 
-        x='Dzongkhag', 
-        y=indicator_choice, 
-        ax=ax_bar, 
-        palette='viridis'
-    )
-    ax_bar.set_title(f'{indicator_choice} by Dzongkhag ({latest_year})')
-    ax_bar.set_ylabel(indicator_choice)
-    st.pyplot(fig_bar)
-    
-    st.markdown("---")
-    
-    # --- 4.3 Model Prediction Widget ---
-    st.header("7️⃣ Model Inference: Predict Admission Rate")
-    st.caption("Use the trained model to predict the Admission Rate Per 1000 based on health metrics.")
-    
-    dzongkhag_options = df_plot['Dzongkhag'].unique()
-    dzongkhag_pop = {
-        'Thimphu': 130000, 'Paro': 45000, 'Chukha': 90000, 
-        'Samdrup Jongkhar': 40000, 'Bumthang': 18000
-    }
+
+if st.checkbox("Show Indicator counts"):
+    st.bar_chart(df_clean['GHO_DISPLAY'].value_counts())
+
+# ----------------------------------------------------
+# SECTION 4: FEATURE ENGINEERING
+# ----------------------------------------------------
+st.header("4. Feature Engineering")
+
+st.write("Features selected: **Indicator Name (`GHO_DISPLAY`)** and **Dimension Name (`DIMENSION_NAME`)**.")
+
+df_features = df_clean.copy()
+
+st.write("Feature-engineered data preview:")
+st.dataframe(df_features[[*FEATURE_COLUMNS, TARGET_COLUMN]].head())
+
+
+# ----------------------------------------------------
+# SECTION 5: TRAIN OR LOAD MODEL
+# ----------------------------------------------------
+st.header("5. Machine Learning Model")
+
+mode = st.radio("Choose model mode:", ["Train New Model", "Load Existing Model"], index=0)
+
+model = None
+preprocessor = None
+
+if mode == "Train New Model":
+    model = create_and_train_model(df_features, FEATURE_COLUMNS, TARGET_COLUMN)
+    if model:
+        # Load the preprocessor that was saved during training for prediction
+        preprocessor = joblib.load(PREPROCESSOR_PATH)
+elif mode == "Load Existing Model":
+    try:
+        model = joblib.load(MODEL_PATH)
+        preprocessor = joblib.load(PREPROCESSOR_PATH)
+        st.success("Model and preprocessor loaded successfully from saved files.")
+    except FileNotFoundError:
+        st.warning("Model files not found. Please train a new model first.")
+
+# ----------------------------------------------------
+# SECTION 6: PREDICTION INTERFACE
+# ----------------------------------------------------
+st.header("6. Prediction Interface")
+
+if model is not None and preprocessor is not None:
+    st.subheader("Predict the Existence of a National Law")
+    st.caption("Inputs are based on the available Road Safety Indicators.")
+
+    # Get unique categories for inputs from the data
+    indicator_options = df_features['GHO_DISPLAY'].unique().tolist()
+    dimension_options = df_features['DIMENSION_NAME'].unique().tolist()
     
     with st.form("prediction_form"):
-        col_p1, col_p2 = st.columns(2)
+        # Prediction Input Widgets
+        col1, col2 = st.columns(2)
         
-        with col_p1:
-            p_malaria = st.slider("Malaria Cases", 0, 100, 10)
-            p_tb = st.slider("TB Cases", 0, 200, 50)
-            p_admissions = st.slider("Hospital Admissions (Placeholder for rate calculation)", 100, 5000, 1500)
-            
-        with col_p2:
-            p_vaccine = st.slider("Vaccination Rate (%)", 50.0, 100.0, 95.0)
-            p_dzongkhag = st.selectbox("Dzongkhag", dzongkhag_options)
-            
-            # The Admission Rate is the target, so we calculate the input Admission_Rate_Per_1000
-            # feature value *before* scaling, which the model uses to predict the scaled target.
-            p_risk_score = p_malaria * 2 + p_tb * 1.5
-            p_pop = dzongkhag_pop.get(p_dzongkhag, 10000)
-            p_admission_rate_per_1000 = (p_admissions / p_pop) * 1000 # Use placeholder admissions to calculate the feature value
+        with col1:
+            p_indicator = st.selectbox(
+                "Road Safety Indicator:",
+                indicator_options
+            )
+        with col2:
+            p_dimension = st.selectbox(
+                "Specific Dimension:",
+                dimension_options
+            )
 
-        submitted = st.form_submit_button("Predict Admission Rate")
-        
-        if submitted:
-            # Create input DataFrame (must match the structure of the training data features before scaling)
-            input_data_raw = pd.DataFrame([{
-                'Malaria_Cases': p_malaria,
-                'TB_Cases': p_tb,
-                'Hospital_Admissions': p_admissions,
-                'Vaccination_Rate': p_vaccine,
-                'Disease_Risk_Score': p_risk_score,
-                'Admission_Rate_Per_1000': p_admission_rate_per_1000, # This is the feature input, NOT the target
-                'Dzongkhag': p_dzongkhag
-            }])
-
-            # Apply the saved preprocessor pipeline
+        if st.form_submit_button("Predict Law Existence"):
             try:
-                X_new_scaled = preprocessor.transform(input_data_raw)
+                # 1. Create raw input DataFrame
+                X_input_raw = pd.DataFrame([{
+                    'GHO_DISPLAY': p_indicator,
+                    'DIMENSION_NAME': p_dimension
+                }])
                 
-                # Align the input array with the feature column names used during training
-                feature_cols_all = df_final.drop(columns=['Admission_Rate_Per_1000', 'Year']).columns
-                X_new_df = pd.DataFrame(X_new_scaled, columns=feature_cols_all)
-                
-                # Drop the target feature from the prediction input (it's the last numeric feature column)
-                X_new_df.drop(columns=['Admission_Rate_Per_1000'], inplace=True) 
+                # 2. Transform input using the fitted preprocessor (One-Hot Encoder)
+                X_input_transformed = model.named_steps['preprocessor'].transform(X_input_raw)
 
-                prediction_scaled = model.predict(X_new_df)
+                # 3. Predict probability
+                pred_proba = model.predict_proba(X_input_transformed)[:, 1][0]
                 
-                # Interpretation of the result
-                st.success(f"**Predicted Scaled Admission Rate:** **{prediction_scaled[0]:.2f}**")
-                st.info("Note: The model predicts a *scaled* rate. This indicates whether the conditions (Malaria, TB, Vaccine, etc.) lead to a high (positive scaled value) or low (negative scaled value) admission rate compared to the average.")
+                # 4. Predict class (0 or 1)
+                pred_class = (pred_proba > 0.5).astype(int)
+
+                st.success(f"Prediction Complete!")
+                
+                st.markdown(f"**Predicted Outcome:** {'**Law Exists (Yes)**' if pred_class == 1 else '**Law Does Not Exist (No/N/A)**'}")
+                st.info(f"Probability of Law Existence (Is_Law=1): **{pred_proba:.2f}**")
                 
             except Exception as e:
-                st.error(f"Prediction Error. Ensure the model/preprocessor objects are available. Error: {e}")
+                st.error(f"Prediction failed. Ensure inputs are valid for the trained model. Error: {e}")
+else:
+    st.warning("Model not available. Please train or upload a model in Section 5.")
 
-# --- Main Execution Flow ---
+# ----------------------------------------------------
+# SECTION 7: EXPORT PROCESSED DATA (OPTIONAL)
+# ----------------------------------------------------
+st.header("7. Export Processed Data")
 
-if __name__ == "__main__":
-    
-    # 0. Check and set up
-    st.markdown("## ⚙️ Data Science Workflow Status")
-
-    # 1. Data Generation
-    df_raw = create_synthetic_data()
-    
-    # 2. Preprocessing & Feature Engineering
-    if df_raw is not None:
-        # Use st.cache_data to run this only once
-        @st.cache_data
-        def run_preprocess_and_engineer(data):
-            return preprocess_and_engineer(data)
-            
-        df_final, df_eda, preprocessor = run_preprocess_and_engineer(df_raw)
-        
-    # 3. Model Training
-    if 'df_final' in locals() and df_final is not None:
-        # Use st.cache_resource to run training only once and cache the model/preprocessor
-        @st.cache_resource
-        def run_train_model(data):
-            return train_model(data)
-            
-        model = run_train_model(df_final)
-    
-    # 4. Run App
-    if 'model' in locals() and model is not None:
-        st.markdown("---")
-        run_app(df_final, df_eda, model, preprocessor)
-    else:
-        st.error("Workflow not fully completed. Check the status messages above.")
+if st.button("Download cleaned dataset"):
+    cleaned_csv = df_features.to_csv(index=False).encode("utf-8")
+    st.download_button("Download CSV", cleaned_csv, "cleaned_features_data.csv", "text/csv")
