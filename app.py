@@ -10,14 +10,11 @@ from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import accuracy_score
 
-# --- Configuration ---
 MODEL_PATH = 'models/logistic_regression_model.pkl'
 PREPROCESSOR_PATH = 'models/preprocessor.pkl'
 RAW_DATA_PATH = "road_safety_indicators_btn.csv"
 TARGET_COLUMN = 'Is_Law'
 FEATURE_COLUMNS = ['GHO_DISPLAY', 'DIMENSION_NAME']
-
-# --- Helper Functions (Model Training/Loading) ---
 
 def create_and_train_model(df_features, features, target):
     """Creates, trains, and saves the full ML pipeline."""
@@ -83,8 +80,7 @@ def load_and_clean_data(file_path):
     except Exception as e:
         st.error(f"Error loading data: {e}. Check if '{file_path}' exists and is correctly formatted.")
         st.stop()
-        
-# --- Streamlit UI ---
+
 
 st.set_page_config(page_title="Bhutan Healthcare Analytics", layout="wide")
 
@@ -93,9 +89,6 @@ st.write("This application analyzes WHO Road Safety Indicators for Bhutan and pr
 st.markdown("---")
 
 
-# ----------------------------------------------------
-# SECTION 1: DATA LOADING
-# ----------------------------------------------------
 st.header("1. Load Healthcare Dataset")
 
 # Directly load the uploaded file for a seamless runnable example
@@ -108,9 +101,7 @@ except:
     st.warning(f"Could not load required file '{RAW_DATA_PATH}'.")
     st.stop()
 
-# ----------------------------------------------------
-# SECTION 2: BASIC DATA CLEANING (EDIT AS NEEDED)
-# ----------------------------------------------------
+
 st.header("2. Basic Data Cleaning")
 
 df_clean = df_raw.copy()
@@ -122,9 +113,7 @@ df_clean[TARGET_COLUMN] = (df_clean['Value'] == 'Yes').astype(int)
 st.write("Cleaned dataset (Target `Is_Law` created):")
 st.dataframe(df_clean[[*FEATURE_COLUMNS, TARGET_COLUMN]].head())
 
-# ----------------------------------------------------
-# SECTION 3: EXPLORATORY DATA ANALYSIS (EDIT AS NEEDED)
-# ----------------------------------------------------
+
 st.header("3. Exploratory Data Analysis (EDA)")
 
 if st.checkbox("Show target variable distribution"):
@@ -138,9 +127,7 @@ if st.checkbox("Show target variable distribution"):
 if st.checkbox("Show Indicator counts"):
     st.bar_chart(df_clean['GHO_DISPLAY'].value_counts())
 
-# ----------------------------------------------------
-# SECTION 4: FEATURE ENGINEERING
-# ----------------------------------------------------
+
 st.header("4. Feature Engineering")
 
 st.write("Features selected: **Indicator Name (`GHO_DISPLAY`)** and **Dimension Name (`DIMENSION_NAME`)**.")
@@ -151,9 +138,6 @@ st.write("Feature-engineered data preview:")
 st.dataframe(df_features[[*FEATURE_COLUMNS, TARGET_COLUMN]].head())
 
 
-# ----------------------------------------------------
-# SECTION 5: TRAIN OR LOAD MODEL
-# ----------------------------------------------------
 st.header("5. Machine Learning Model")
 
 mode = st.radio("Choose model mode:", ["Train New Model", "Load Existing Model"], index=0)
@@ -174,9 +158,7 @@ elif mode == "Load Existing Model":
     except FileNotFoundError:
         st.warning("Model files not found. Please train a new model first.")
 
-# ----------------------------------------------------
-# SECTION 6: PREDICTION INTERFACE (FIXED)
-# ----------------------------------------------------
+
 st.header("6. Prediction Interface")
 
 if model is not None:
@@ -230,9 +212,7 @@ if model is not None:
 else:
     st.warning("Model not available. Please train or upload a model in Section 5.")
 
-# ----------------------------------------------------
-# SECTION 7: EXPORT PROCESSED DATA (OPTIONAL)
-# ----------------------------------------------------
+
 st.header("7. Export Processed Data")
 
 if st.button("Download cleaned dataset"):
