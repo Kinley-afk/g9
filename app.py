@@ -175,11 +175,11 @@ elif mode == "Load Existing Model":
         st.warning("Model files not found. Please train a new model first.")
 
 # ----------------------------------------------------
-# SECTION 6: PREDICTION INTERFACE
+# SECTION 6: PREDICTION INTERFACE (FIXED)
 # ----------------------------------------------------
 st.header("6. Prediction Interface")
 
-if model is not None and preprocessor is not None:
+if model is not None:
     st.subheader("Predict the Existence of a National Law")
     st.caption("Inputs are based on the available Road Safety Indicators.")
 
@@ -210,13 +210,14 @@ if model is not None and preprocessor is not None:
                     'DIMENSION_NAME': p_dimension
                 }])
                 
-                # 2. Transform input using the fitted preprocessor (One-Hot Encoder)
-                X_input_transformed = model.named_steps['preprocessor'].transform(X_input_raw)
-
-                # 3. Predict probability
-                pred_proba = model.predict_proba(X_input_transformed)[:, 1][0]
+                # --- FIX IS HERE ---
+                # Do NOT manually transform. Pass raw data directly to the pipeline.
                 
-                # 4. Predict class (0 or 1)
+                # 2. Predict probability
+                # The pipeline automatically runs the preprocessor, then the classifier.
+                pred_proba = model.predict_proba(X_input_raw)[:, 1][0]
+                
+                # 3. Predict class (0 or 1)
                 pred_class = (pred_proba > 0.5).astype(int)
 
                 st.success(f"Prediction Complete!")
@@ -225,7 +226,7 @@ if model is not None and preprocessor is not None:
                 st.info(f"Probability of Law Existence (Is_Law=1): **{pred_proba:.2f}**")
                 
             except Exception as e:
-                st.error(f"Prediction failed. Ensure inputs are valid for the trained model. Error: {e}")
+                st.error(f"Prediction failed. Error: {e}")
 else:
     st.warning("Model not available. Please train or upload a model in Section 5.")
 
